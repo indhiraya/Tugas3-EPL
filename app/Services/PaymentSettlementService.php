@@ -35,7 +35,7 @@ class PaymentSettlementService
     public static function isPaid(Order $order): bool
     {
         $paidAmount = static::getPaidAmount($order); // In cents
-        $totalPrice = (int) round($order->total_price * 100); // Convert dollars to cents
+        $totalPrice = static::toCents($order);
 
         return $paidAmount >= $totalPrice;
     }
@@ -84,7 +84,7 @@ class PaymentSettlementService
      */
     public static function getRemainingAmount(Order $order): int
     {
-        $totalPrice = (int) round($order->total_price * 100); // Convert dollars to cents
+        $totalPrice = static::toCents($order);
         $paidAmount = static::getPaidAmount($order); // Already in cents
 
         return max(0, $totalPrice - $paidAmount);
@@ -98,10 +98,21 @@ class PaymentSettlementService
      */
     public static function getChangeAmount(Order $order): int
     {
-        $totalPrice = (int) round($order->total_price * 100); // Convert dollars to cents
+        $totalPrice = static::toCents($order);
         $paidAmount = static::getPaidAmount($order); // Already in cents
 
         return max(0, $paidAmount - $totalPrice);
+    }
+
+    /**
+     * Convert the order total price (dollars) to cents
+     *
+     * @param  Order  $order  The order whose total price is converted
+     * @return int Total price in cents
+     */
+    private static function toCents(Order $order): int
+    {
+        return (int) round($order->total_price * 100);
     }
 
     /**
