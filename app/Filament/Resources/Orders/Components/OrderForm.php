@@ -381,34 +381,6 @@ class OrderForm
         ];
     }
 
-    /** @return array<string,string>|Closure */
-    protected static function getItemsRepeaterColStyles(): array | Closure
-    {
-        return static function ($operation) {
-            return static::getColumnStylesForOperation($operation);
-        };
-    }
-
-    /**
-     * @return array<string,string>
-     */
-    protected static function getColumnStylesForOperation(string $operation): array
-    {
-        if ($operation === 'create') {
-            return [
-                'product_name' => 'width: 70%',
-                'qty' => 'width: 15%',
-                'unit_price' => 'width: 15%',
-            ];
-        }
-
-        return [
-            'product_name' => 'width: 60%',
-            'qty' => 'width: 20%',
-            'unit_price' => 'width: 20%',
-        ];
-    }
-
     protected static function getPaymentFormSchema(): Repeater
     {
         return Repeater::make('payments')

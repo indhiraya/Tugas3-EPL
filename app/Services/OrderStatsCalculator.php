@@ -51,26 +51,4 @@ class OrderStatsCalculator
 
         return $trendQuery->count();
     }
-
-    /**
-     * Calculate open orders count
-     *
-     * @param  Builder<\App\Models\Order>  $baseQuery
-     */
-    protected static function calculateOpenOrders(Builder $baseQuery): int
-    {
-        return $baseQuery->clone()
-            ->whereIn('status', ['new', 'processing'])
-            ->count();
-    }
-
-    /**
-     * Calculate average price for orders
-     *
-     * @param  Builder<\App\Models\Order>  $baseQuery
-     */
-    protected static function calculateAveragePrice(Builder $baseQuery): float
-    {
-        return round((float) $baseQuery->avg('total_price') / 100, precision: 2);
-    }
 }
