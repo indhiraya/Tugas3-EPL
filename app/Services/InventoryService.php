@@ -62,15 +62,15 @@ class InventoryService
      */
     protected static function handleStatusChange(Order $order, ?OrderStatus $oldStatus, OrderStatus $newStatus): void
     {
+        $wasConsumingStock = (bool) $oldStatus?->consumesStock();
+
         // Deduct stock when moving to Processing or Completed
-        if (in_array($newStatus, [OrderStatus::Processing, OrderStatus::Completed]) &&
-            ! in_array($oldStatus, [OrderStatus::Processing, OrderStatus::Completed])) {
+        if ($newStatus->consumesStock() && ! $wasConsumingStock) {
             static::deductStock($order);
         }
 
         // Restore stock when moving to Cancelled from Processing or Completed
-        if ($newStatus === OrderStatus::Cancelled &&
-            in_array($oldStatus, [OrderStatus::Processing, OrderStatus::Completed])) {
+        if ($newStatus === OrderStatus::Cancelled && $wasConsumingStock) {
             static::restoreStock($order);
         }
     }
@@ -82,17 +82,7 @@ class InventoryService
      */
     protected static function deductStock(Order $order): void
     {
-        $order->loadMissing('items.product');
-
-        DB::transaction(function () use ($order) {
-            foreach ($order->items as $item) {
-                if ($item->product) {
-                    // Use decrement for atomic operation with race condition protection
-                    // SQL: UPDATE products SET stock_quantity = stock_quantity - :qty WHERE id = :id
-                    $item->product->decrement('stock_quantity', $item->qty);
-                }
-            }
-        });
+        static::applyItemQuantities($order, -1);
     }
 
     /**
@@ -102,14 +92,25 @@ class InventoryService
      */
     protected static function restoreStock(Order $order): void
     {
+        static::applyItemQuantities($order, 1);
+    }
+
+    /**
+     * Apply the quantities of an order's items to product stock
+     *
+     * @param  Order  $order  The order whose items are applied
+     * @param  int  $direction  -1 to deduct stock, 1 to restore stock
+     */
+    protected static function applyItemQuantities(Order $order, int $direction): void
+    {
         $order->loadMissing('items.product');
 
-        DB::transaction(function () use ($order) {
+        DB::transaction(function () use ($order, $direction) {
             foreach ($order->items as $item) {
                 if ($item->product) {
-                    // Use increment for atomic operation
-                    // SQL: UPDATE products SET stock_quantity = stock_quantity + :qty WHERE id = :id
-                    $item->product->increment('stock_quantity', $item->qty);
+                    // Use increment for atomic operation with race condition protection
+                    // SQL: UPDATE products SET stock_quantity = stock_quantity + :delta WHERE id = :id
+                    $item->product->increment('stock_quantity', $direction * $item->qty);
                 }
             }
         });
@@ -125,7 +126,7 @@ class InventoryService
     public static function adjustForOrderItemChanges(Order $order, array $newItems, array $oldItems): void
     {
         // Only adjust stock if order is in Processing or Completed status
-        if (! in_array($order->status, [OrderStatus::Processing, OrderStatus::Completed])) {
+        if (! $order->status?->consumesStock()) {
             return;
         }
 
@@ -136,6 +137,10 @@ class InventoryService
         $allProductIds = $newItemsByProduct->keys()->merge($oldItemsByProduct->keys())->unique();
 
         DB::transaction(function () use ($allProductIds, $newItemsByProduct, $oldItemsByProduct) {
+            // SQL: SELECT * FROM products WHERE id IN (:product_ids)
+            // One query for all products instead of one query per product (N+1)
+            $products = Product::query()->whereIn('id', $allProductIds)->get()->keyBy('id');
+
             foreach ($allProductIds as $productId) {
                 $newQty = $newItemsByProduct->get($productId, collect())->sum('qty');
                 $oldQty = $oldItemsByProduct->get($productId, collect())->sum('qty');
@@ -143,8 +148,7 @@ class InventoryService
                 $delta = $newQty - $oldQty;
 
                 if ($delta !== 0) {
-                    // SQL: SELECT * FROM products WHERE id = :product_id LIMIT 1
-                    $product = Product::find($productId);
+                    $product = $products->get($productId);
                     if ($product) {
                         // Negative delta means stock should be reduced (more items ordered)
                         // Positive delta means stock should be increased (fewer items ordered)

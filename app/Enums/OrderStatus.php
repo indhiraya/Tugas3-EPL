@@ -45,4 +45,15 @@ enum OrderStatus: string implements HasColor, HasIcon, HasLabel
             self::Cancelled => 'heroicon-m-x-circle',
         };
     }
+
+    /**
+     * Whether an order in this status has its items deducted from stock.
+     */
+    public function consumesStock(): bool
+    {
+        return match ($this) {
+            self::Processing, self::Completed => true,
+            self::New, self::Cancelled => false,
+        };
+    }
 }
