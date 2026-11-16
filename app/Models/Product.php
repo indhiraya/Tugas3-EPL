@@ -48,6 +48,7 @@ use Spatie\MediaLibrary\MediaCollections\Models\Media;
  * @method static Builder<static>|Product wherePrice($value)
  * @method static Builder<static>|Product whereSlug($value)
  * @method static Builder<static>|Product whereUpdatedAt($value)
+ * @method static Builder<static>|Product visible()
  *
  * @mixin Eloquent
  */
@@ -92,6 +93,18 @@ class Product extends Model implements HasMedia
     public function items(): HasMany
     {
         return $this->hasMany(OrderItem::class);
+    }
+
+    /**
+     * Limit the query to products shown in the catalog:
+     * visible products that belong to a visible category.
+     *
+     * @param  Builder<Product>  $query
+     */
+    public function scopeVisible(Builder $query): void
+    {
+        $query->whereIsVisible(true)
+            ->whereIn('category_id', Category::query()->whereIsVisible(true)->select('id'));
     }
 
     /**

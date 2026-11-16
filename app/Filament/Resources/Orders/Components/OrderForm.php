@@ -6,7 +6,6 @@ use App\Enums\OrderStatus;
 use App\Enums\PaymentMethod;
 use App\Enums\PaymentStatus;
 use App\Filament\Resources\Products\ProductResource;
-use App\Models\Category;
 use App\Models\Order;
 use App\Models\Product;
 use App\Services\OrderFormValidator;
@@ -32,6 +31,18 @@ use Illuminate\Support\Collection;
 
 class OrderForm
 {
+    protected const TIMEZONE = 'Asia/Jakarta';
+
+    protected const CURRENCY_SYMBOL = 'Rp';
+
+    protected const ORDER_NUMBER_PREFIX = 'OR-';
+
+    protected const ORDER_NUMBER_MIN = 100000;
+
+    protected const ORDER_NUMBER_MAX = 999999;
+
+    protected const MAX_QUANTITY = 999;
+
     /**
      * @return array<Component>
      */
@@ -58,10 +69,10 @@ class OrderForm
                     Section::make()
                         ->schema([
                             TextEntry::make('created_at')
-                                ->state(fn (Order $record): ?string => $record->created_at?->setTimezone('Asia/Jakarta')->diffForHumans()),
+                                ->state(fn (Order $record): ?string => $record->created_at?->setTimezone(static::TIMEZONE)->diffForHumans()),
 
                             TextEntry::make('updated_at')
-                                ->state(fn (Order $record): ?string => $record->updated_at?->setTimezone('Asia/Jakarta')->diffForHumans()),
+                                ->state(fn (Order $record): ?string => $record->updated_at?->setTimezone(static::TIMEZONE)->diffForHumans()),
                         ])
                         ->columnSpan(['lg' => 1])
                         ->hidden(fn (?Order $record): bool => $record === null),
@@ -70,7 +81,7 @@ class OrderForm
                         ->schema([
                             TextEntry::make('total_price')
                                 ->label(__('resources/order.total'))
-                                ->state(fn (Order $record): ?string => $record->total_price !== null ? 'Rp ' . number_format($record->total_price, 2, ',', '.') : null),
+                                ->state(fn (Order $record): ?string => $record->total_price !== null ? static::CURRENCY_SYMBOL . ' ' . number_format($record->total_price, 2, ',', '.') : null),
 
                             static::getPaymentFormSchema(),
                         ])
@@ -97,12 +108,17 @@ class OrderForm
     protected static function getNumberField(): TextInput
     {
         return TextInput::make('number')
-            ->default('OR-' . random_int(100000, 999999))
+            ->default(static::generateOrderNumber())
             ->disabled()
             ->dehydrated()
             ->required()
             ->maxLength(32)
             ->unique(Order::class, 'number', ignoreRecord: true);
+    }
+
+    protected static function generateOrderNumber(): string
+    {
+        return static::ORDER_NUMBER_PREFIX . random_int(static::ORDER_NUMBER_MIN, static::ORDER_NUMBER_MAX);
     }
 
     protected static function getCustomerField(): Select
@@ -157,8 +173,7 @@ class OrderForm
                 //        AND category_id IN (SELECT id FROM categories WHERE is_visible = 1)
                 Product::query()
                     ->select(['id', 'name', 'price'])
-                    ->whereIsVisible(true)
-                    ->whereIn('category_id', Category::whereIsVisible(true)->select('id'))
+                    ->visible()
                     ->get()
                     ->map(fn (Product $product) => [
                         'product_id' => $product->id,
@@ -174,7 +189,7 @@ class OrderForm
     public static function getItemsRepeater(): Repeater
     {
         return Repeater::make('items')
-            ->disabled(fn (?Order $record, string $operation): bool => $record?->status !== OrderStatus::New && $operation !== 'create')
+            ->disabled(fn (?Order $record, string $operation): bool => static::itemsAreLocked($record, $operation))
             ->relationship('items')
             ->table([
                 TableColumn::make('Name'),
@@ -188,9 +203,9 @@ class OrderForm
                 static::getUnitPriceField(),
             ])
             ->extraItemActions(static::getItemsRepeaterExtraItemActions())
-            ->mutateRelationshipDataBeforeFillUsing(fn (array $data): ?array => $data['qty'] > 0 ? $data : null)
-            ->mutateRelationshipDataBeforeCreateUsing(fn (array $data): ?array => $data['qty'] > 0 ? $data : null)
-            ->mutateRelationshipDataBeforeSaveUsing(fn (array $data): ?array => $data['qty'] > 0 ? $data : null)
+            ->mutateRelationshipDataBeforeFillUsing(static::keepItemWithQuantity(...))
+            ->mutateRelationshipDataBeforeCreateUsing(static::keepItemWithQuantity(...))
+            ->mutateRelationshipDataBeforeSaveUsing(static::keepItemWithQuantity(...))
             ->formatStateUsing(
                 static fn (?array $state, ?Order $record): array => static::formatItemsState($state, $record)
             )
@@ -215,6 +230,25 @@ class OrderForm
                     static::validateInventoryAvailability($attribute, $value, $fail);
                 },
             ]);
+    }
+
+    /**
+     * Items can only be edited while the order is new (or being created).
+     */
+    protected static function itemsAreLocked(?Order $record, string $operation): bool
+    {
+        return $record?->status !== OrderStatus::New && $operation !== 'create';
+    }
+
+    /**
+     * Drop items whose quantity is zero.
+     *
+     * @param  array<string, mixed>  $data
+     * @return array<string, mixed>|null
+     */
+    protected static function keepItemWithQuantity(array $data): ?array
+    {
+        return $data['qty'] > 0 ? $data : null;
     }
 
     protected static function validateItemsRepeater(string $_attribute, mixed $value, Closure $fail): void
@@ -250,7 +284,7 @@ class OrderForm
             ->label(__('resources/order.item.quantity'))
             ->inputMode('numeric')
             ->minValue(0)
-            ->maxValue(999)
+            ->maxValue(static::MAX_QUANTITY)
             ->default(0)
             ->lazy()
             ->prefixAction(
@@ -270,11 +304,11 @@ class OrderForm
                     ->iconSize(IconSize::Small)
                     ->size(Size::Small)
                     ->action(fn (Get $get, Set $set) => $set('qty', $get('qty') + 1))
-                    ->disabled(fn (TextInput $component, Get $get) => $component->isDisabled() || $get('qty') >= 999),
+                    ->disabled(fn (TextInput $component, Get $get) => $component->isDisabled() || $get('qty') >= static::MAX_QUANTITY),
                 isInline: true
             )
             ->afterStateUpdated(function (Get $get, Set $set, $old) {
-                if ($get('qty') < 0 || $get('qty') > 999) {
+                if ($get('qty') < 0 || $get('qty') > static::MAX_QUANTITY) {
                     $set('qty', $old);
                 }
             })
@@ -309,7 +343,7 @@ class OrderForm
 
                     $component->callAfterStateUpdated();
                 })
-                ->disabled(fn (?Order $record, string $operation): bool => $record?->status !== OrderStatus::New && $operation !== 'create'),
+                ->disabled(fn (?Order $record, string $operation): bool => static::itemsAreLocked($record, $operation)),
 
             Action::make('openProduct')
                 ->tooltip(__('resources/order.item.open_product'))
@@ -354,10 +388,7 @@ class OrderForm
         return Product::query()
             ->select(['id', 'name', 'price'])
             ->where(function ($query) use ($record) {
-                $query->where(function ($q) {
-                    $q->whereIsVisible(true)
-                        ->whereIn('category_id', Category::whereIsVisible(true)->select('id'));
-                });
+                $query->where(fn ($visible) => $visible->visible());
 
                 if ($record !== null) {
                     $query->orWhereIn('id', $record->items()->select('product_id'));
@@ -415,7 +446,7 @@ class OrderForm
         return TextInput::make('amount')
             ->label(__('resources/order.amount'))
             ->numeric()
-            ->prefix('Rp')
+            ->prefix(static::CURRENCY_SYMBOL)
             ->rules(['regex:/^\d{1,6}(\.\d{0,2})?$/'])
             ->required()
             ->step(1000)
